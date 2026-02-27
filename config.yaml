@@ -1,0 +1,10 @@
+source:
+  interface: "eth0"
+  port: 12101
+
+destination:
+  host: "rtktk.online"
+  port: 1509
+
+logging:
+  level: "debug"
