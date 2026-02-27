@@ -22,6 +22,7 @@
 | 7 | Implement pcap sniffer | ✅ Done | |
 | 8 | Tạo main.go | ✅ Done | |
 | 9 | Build và verify | ✅ Done | Binary: rtcm-relay.exe |
+| 10 | Fix: Buffer header data cho TCP reassembly | ✅ Done | Đảm bảo parse được mount dù header bị chia nhỏ |
 
 ---
 
