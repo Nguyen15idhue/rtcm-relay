@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"io"
 	"log"
 	"rtcm-relay/internal/forwarder"
@@ -11,43 +12,73 @@ import (
 )
 
 type NTRIPStream struct {
-	assembledData []byte
-	mountPoint    string
-	fwd           *forwarder.Forwarder
-	firstData     bool
-	reader        *io.PipeReader
-	writer        *io.PipeWriter
+	headerBuf    []byte
+	mountPoint   string
+	fwd          *forwarder.Forwarder
+	headerParsed bool
+	reader       *io.PipeReader
+	writer       *io.PipeWriter
 }
 
 func NewNTRIPStream(fwd *forwarder.Forwarder) *NTRIPStream {
 	reader, writer := io.Pipe()
 	return &NTRIPStream{
-		fwd:       fwd,
-		firstData: true,
-		reader:    reader,
-		writer:    writer,
+		fwd:          fwd,
+		headerParsed: false,
+		reader:       reader,
+		writer:       writer,
 	}
 }
 
-func (s *NTRIPStream) onData(data []byte) {
-	if s.firstData {
-		req, err := parser.ParseNTRIPRequest(data)
-		if err != nil {
-			log.Printf("[DEBUG] Failed to parse NTRIP request: %v", err)
-			return
-		}
-		if req != nil && req.MountPoint != "" {
-			s.mountPoint = req.MountPoint
-			log.Printf("[DEBUG] Detected mount point: %s", s.mountPoint)
+func (s *NTRIPStream) parseHeader(data []byte) {
+	s.headerBuf = append(s.headerBuf, data...)
 
-			if s.fwd != nil {
-				go s.fwd.StartForwarding(s.reader)
-			}
-		}
-		s.firstData = false
+	headerEnd := bytes.Index(s.headerBuf, []byte("\r\n\r\n"))
+	if headerEnd == -1 {
+		return
 	}
 
-	if s.mountPoint != "" && len(data) > 0 {
+	req, err := parser.ParseNTRIPRequest(s.headerBuf)
+	if err != nil {
+		log.Printf("[DEBUG] Failed to parse NTRIP request: %v", err)
+		s.headerParsed = true
+		return
+	}
+
+	if req != nil && req.MountPoint != "" {
+		s.mountPoint = req.MountPoint
+		log.Printf("[DEBUG] Detected mount point: %s", s.mountPoint)
+
+		if s.fwd != nil {
+			s.fwd.SetMount(s.mountPoint)
+			go s.fwd.StartForwarding(s.reader)
+		}
+	} else {
+		log.Printf("[DEBUG] No mount point in header, using default")
+		s.mountPoint = "default"
+		if s.fwd != nil {
+			s.fwd.SetMount(s.mountPoint)
+			go s.fwd.StartForwarding(s.reader)
+		}
+	}
+
+	s.headerParsed = true
+
+	remainingData := s.headerBuf[headerEnd+4:]
+	if len(remainingData) > 0 && s.writer != nil {
+		s.writer.Write(remainingData)
+	}
+
+	s.headerBuf = nil
+}
+
+func (s *NTRIPStream) onData(data []byte) {
+	if !s.headerParsed {
+		s.parseHeader(data)
+		return
+	}
+
+	if s.mountPoint != "" && s.writer != nil && len(data) > 0 {
 		_, err := s.writer.Write(data)
 		if err != nil {
 			log.Printf("[DEBUG] Write to pipe error: %v", err)
@@ -94,7 +125,7 @@ func NewStreamFactory(host string, port int) *StreamFactory {
 }
 
 func (f *StreamFactory) New(netFlow, tcpFlow gopacket.Flow) tcpassembly.Stream {
-	log.Printf("[DEBUG] New TCP stream")
+	log.Printf("[DEBUG] New TCP stream: %s -> %s", netFlow.Src(), netFlow.Dst())
 
 	fwd := forwarder.NewForwarder(f.DestHost, f.DestPort, "", func() {
 		log.Printf("[DEBUG] Forwarder closed")

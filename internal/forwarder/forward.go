@@ -98,6 +98,12 @@ func (f *Forwarder) IsConnected() bool {
 	return f.connected
 }
 
+func (f *Forwarder) SetMount(mount string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mount = mount
+}
+
 func PipeData(reader io.Reader, writer io.Writer, onClose func()) {
 	buf := make([]byte, 4096)
 	for {
