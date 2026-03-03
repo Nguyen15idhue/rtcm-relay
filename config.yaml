@@ -1,5 +1,6 @@
 source:
-  interface: "eth0"
+  # Ten interface mang. Dung 'auto' de tu phat hien, hoac dung 'ip a' de xem ten cu the (eth0, ens3, enp1s0...)
+  interface: "auto"
   port: 12101
 
 destination:

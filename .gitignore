@@ -28,3 +28,6 @@ Thumbs.db
 # Build
 bin/
 dist/
+
+# Linux binary
+rtcm-relay

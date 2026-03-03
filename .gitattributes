@@ -1,0 +1,16 @@
+# Mặc định: tự động xử lý line endings
+* text=auto
+
+# Shell scripts: bắt buộc LF (để chạy được trên Linux)
+*.sh text eol=lf
+
+# Makefile: bắt buộc LF
+Makefile text eol=lf
+
+# Go source: tự động
+*.go text eol=lf
+
+# Binary files
+*.exe binary
+*.dll binary
+*.so binary

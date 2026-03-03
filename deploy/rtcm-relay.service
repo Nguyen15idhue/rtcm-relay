@@ -1,0 +1,21 @@
+[Unit]
+Description=RTCM Stream Relay - Forward NTRIP corrections to GeoNtripCaster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rtcm-relay
+ExecStart=/opt/rtcm-relay/rtcm-relay -config /opt/rtcm-relay/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rtcm-relay
+
+# Cấp quyền raw socket cho pcap (cần root hoặc CAP_NET_RAW)
+AmbientCapabilities=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

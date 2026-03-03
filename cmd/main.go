@@ -11,12 +11,18 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config.yaml", "Path to config file")
+	configPath  := flag.String("config", "config.yaml", "Path to config file")
+	ifaceOverride := flag.String("interface", "", "Override network interface (e.g. eth0, ens3). Ghi de gia tri trong config.yaml")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Flag -interface ghi de config
+	if *ifaceOverride != "" {
+		cfg.Source.Interface = *ifaceOverride
 	}
 
 	log.Printf("[DEBUG] Configuration loaded:")
