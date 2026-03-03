@@ -2,140 +2,164 @@ package stream
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log"
 	"rtcm-relay/internal/forwarder"
 	"rtcm-relay/internal/parser"
+	"sync"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/tcpassembly"
 )
 
-type NTRIPStream struct {
+// RequestStream: chi doc GET request de lay mount point, KHONG forward gi ca.
+// Chieu: client -> server (dst port = 12101)
+type RequestStream struct {
 	headerBuf    []byte
-	mountPoint   string
-	fwd          *forwarder.Forwarder
 	headerParsed bool
-	reader       *io.PipeReader
+	key          string // "clientIP:clientPort"
+	factory      *StreamFactory
+}
+
+func (s *RequestStream) Reassembled(r []tcpassembly.Reassembly) {
+	if s.headerParsed {
+		return
+	}
+	for _, reassembly := range r {
+		if len(reassembly.Bytes) == 0 {
+			continue
+		}
+		s.headerBuf = append(s.headerBuf, reassembly.Bytes...)
+		headerEnd := bytes.Index(s.headerBuf, []byte("\r\n\r\n"))
+		if headerEnd == -1 {
+			continue
+		}
+		req, err := parser.ParseNTRIPRequest(s.headerBuf)
+		if err == nil && req != nil && req.MountPoint != "" {
+			log.Printf("[INFO] Mount detected: %s (client: %s)", req.MountPoint, s.key)
+			s.factory.mounts.Store(s.key, req.MountPoint)
+		}
+		s.headerParsed = true
+		break
+	}
+}
+
+func (s *RequestStream) ReassemblyComplete() {
+	// Giu lai mount mot luc de DataStream kip lay, xoa sau
+}
+
+// DataStream: doc ICY 200 OK (bo qua), sau do forward toan bo RTCM data len caster.
+// Chieu: server -> client (src port = 12101)
+type DataStream struct {
+	headerBuf    []byte
+	headerParsed bool
+	key          string // "clientIP:clientPort"
+	factory      *StreamFactory
 	writer       *io.PipeWriter
 }
 
-func NewNTRIPStream(fwd *forwarder.Forwarder) *NTRIPStream {
-	reader, writer := io.Pipe()
-	return &NTRIPStream{
-		fwd:          fwd,
-		headerParsed: false,
-		reader:       reader,
-		writer:       writer,
-	}
-}
-
-func (s *NTRIPStream) parseHeader(data []byte) {
-	s.headerBuf = append(s.headerBuf, data...)
-
-	headerEnd := bytes.Index(s.headerBuf, []byte("\r\n\r\n"))
-	if headerEnd == -1 {
-		return
-	}
-
-	req, err := parser.ParseNTRIPRequest(s.headerBuf)
-	if err != nil {
-		log.Printf("[DEBUG] Failed to parse NTRIP request: %v", err)
-		s.headerParsed = true
-		return
-	}
-
-	if req != nil && req.MountPoint != "" {
-		s.mountPoint = req.MountPoint
-		log.Printf("[DEBUG] Detected mount point: %s", s.mountPoint)
-
-		if s.fwd != nil {
-			s.fwd.SetMount(s.mountPoint)
-			go s.fwd.StartForwarding(s.reader)
-		}
-	} else {
-		log.Printf("[DEBUG] No mount point in header, using default")
-		s.mountPoint = "default"
-		if s.fwd != nil {
-			s.fwd.SetMount(s.mountPoint)
-			go s.fwd.StartForwarding(s.reader)
-		}
-	}
-
-	s.headerParsed = true
-
-	remainingData := s.headerBuf[headerEnd+4:]
-	if len(remainingData) > 0 && s.writer != nil {
-		s.writer.Write(remainingData)
-	}
-
-	s.headerBuf = nil
-}
-
-func (s *NTRIPStream) onData(data []byte) {
-	if !s.headerParsed {
-		s.parseHeader(data)
-		return
-	}
-
-	if s.mountPoint != "" && s.writer != nil && len(data) > 0 {
-		_, err := s.writer.Write(data)
-		if err != nil {
-			log.Printf("[DEBUG] Write to pipe error: %v", err)
-		}
-	}
-}
-
-func (s *NTRIPStream) ReassembledBPF() []string {
-	return []string{}
-}
-
-func (s *NTRIPStream) Reassembled(r []tcpassembly.Reassembly) {
+func (s *DataStream) Reassembled(r []tcpassembly.Reassembly) {
 	for _, reassembly := range r {
-		if len(reassembly.Bytes) > 0 {
-			s.onData(reassembly.Bytes)
+		if len(reassembly.Bytes) == 0 {
+			continue
+		}
+		if !s.headerParsed {
+			s.headerBuf = append(s.headerBuf, reassembly.Bytes...)
+			headerEnd := bytes.Index(s.headerBuf, []byte("\r\n\r\n"))
+			if headerEnd == -1 {
+				continue
+			}
+			s.headerParsed = true
+
+			// Lay mount point tu RequestStream da luu
+			mountVal, ok := s.factory.mounts.Load(s.key)
+			if !ok {
+				log.Printf("[DEBUG] No mount for client %s, skip", s.key)
+				return
+			}
+			mount := mountVal.(string)
+			log.Printf("[INFO] Starting RTCM forward: mount=%s client=%s", mount, s.key)
+
+			reader, writer := io.Pipe()
+			s.writer = writer
+
+			fwd := forwarder.NewForwarder(
+				s.factory.DestHost, s.factory.DestPort,
+				mount,
+				s.factory.DestUser, s.factory.DestPass,
+				s.factory.NTRIPVersion,
+				func() { log.Printf("[DEBUG] Forwarder closed, mount=%s", mount) },
+			)
+			go fwd.StartForwarding(reader)
+
+			// RTCM data bat dau ngay sau ICY header
+			remaining := s.headerBuf[headerEnd+4:]
+			if len(remaining) > 0 {
+				writer.Write(remaining)
+			}
+			s.headerBuf = nil
+		} else {
+			if s.writer != nil {
+				_, err := s.writer.Write(reassembly.Bytes)
+				if err != nil {
+					log.Printf("[DEBUG] Pipe write error: %v", err)
+				}
+			}
 		}
 	}
 }
 
-func (s *NTRIPStream) ReassemblyComplete() {}
-
-func (s *NTRIPStream) Write(b []byte) (n int, err error) {
-	s.onData(b)
-	return len(b), nil
-}
-
-func (s *NTRIPStream) Close() {
+func (s *DataStream) ReassemblyComplete() {
 	if s.writer != nil {
 		s.writer.Close()
 	}
-	log.Printf("[DEBUG] Stream closed for mount: %s", s.mountPoint)
+	s.factory.mounts.Delete(s.key)
 }
 
+// StreamFactory tao stream cho tung TCP connection.
 type StreamFactory struct {
 	DestHost     string
 	DestPort     int
 	DestUser     string
 	DestPass     string
 	NTRIPVersion int
+	SrcPort      int
+	mounts       sync.Map // "clientIP:clientPort" -> mountPoint
 }
 
-func NewStreamFactory(host string, port int, user string, pass string, ntripVersion int) *StreamFactory {
+func NewStreamFactory(host string, port int, user string, pass string, ntripVersion int, srcPort int) *StreamFactory {
 	return &StreamFactory{
 		DestHost:     host,
 		DestPort:     port,
 		DestUser:     user,
 		DestPass:     pass,
 		NTRIPVersion: ntripVersion,
+		SrcPort:      srcPort,
 	}
 }
 
 func (f *StreamFactory) New(netFlow, tcpFlow gopacket.Flow) tcpassembly.Stream {
-	log.Printf("[DEBUG] New TCP stream: %s -> %s", netFlow.Src(), netFlow.Dst())
+	srcIP := netFlow.Src().String()
+	dstIP := netFlow.Dst().String()
+	srcPort := tcpFlow.Src().String()
+	dstPort := tcpFlow.Dst().String()
 
-	fwd := forwarder.NewForwarder(f.DestHost, f.DestPort, "", f.DestUser, f.DestPass, f.NTRIPVersion, func() {
-		log.Printf("[DEBUG] Forwarder closed")
-	})
+	srcPortStr := fmt.Sprintf("%d", f.SrcPort)
 
-	return NewNTRIPStream(fwd)
+	if dstPort == srcPortStr {
+		// Client -> Server: parse GET de lay mount
+		key := fmt.Sprintf("%s:%s", srcIP, srcPort)
+		log.Printf("[DEBUG] Request stream: %s:%s -> %s:%s", srcIP, srcPort, dstIP, dstPort)
+		return &RequestStream{key: key, factory: f}
+	} else if srcPort == srcPortStr {
+		// Server -> Client: RTCM data (sau ICY 200 OK)
+		// key dung clientIP:clientPort de match voi RequestStream
+		key := fmt.Sprintf("%s:%s", dstIP, dstPort)
+		log.Printf("[DEBUG] Data stream: %s:%s -> %s:%s (mount key: %s)", srcIP, srcPort, dstIP, dstPort, key)
+		return &DataStream{key: key, factory: f}
+	}
+
+	// Traffic khac (khong lien quan)
+	return &RequestStream{key: "", factory: f}
 }

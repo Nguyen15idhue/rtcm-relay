@@ -31,7 +31,7 @@ func NewSniffer(interfaceName string, port int, destHost string, destPort int, d
 
 	log.Printf("[DEBUG] Sniffer started on interface %s, filtering port %d", interfaceName, port)
 
-	factory := stream.NewStreamFactory(destHost, destPort, destUser, destPass, ntripVersion)
+	factory := stream.NewStreamFactory(destHost, destPort, destUser, destPass, ntripVersion, port)
 	streamPool := tcpassembly.NewStreamPool(factory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 
