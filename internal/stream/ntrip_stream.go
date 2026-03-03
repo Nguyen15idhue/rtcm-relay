@@ -8,6 +8,7 @@ import (
 	"rtcm-relay/internal/forwarder"
 	"rtcm-relay/internal/parser"
 	"sync"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/tcpassembly"
@@ -53,10 +54,12 @@ func (s *RequestStream) ReassemblyComplete() {
 // Chieu: server -> client (src port = 12101)
 type DataStream struct {
 	headerBuf    []byte
+	pendingBuf   []byte // data buffered truoc khi mount duoc xac dinh
 	headerParsed bool
 	key          string // "clientIP:clientPort"
 	factory      *StreamFactory
 	writer       *io.PipeWriter
+	writerMu     sync.Mutex
 }
 
 func (s *DataStream) Reassembled(r []tcpassembly.Reassembly) {
@@ -72,47 +75,79 @@ func (s *DataStream) Reassembled(r []tcpassembly.Reassembly) {
 			}
 			s.headerParsed = true
 
-			// Lay mount point tu RequestStream da luu
-			mountVal, ok := s.factory.mounts.Load(s.key)
-			if !ok {
-				log.Printf("[DEBUG] No mount for client %s, skip", s.key)
-				return
-			}
-			mount := mountVal.(string)
-			log.Printf("[INFO] Starting RTCM forward: mount=%s client=%s", mount, s.key)
-
-			reader, writer := io.Pipe()
-			s.writer = writer
-
-			fwd := forwarder.NewForwarder(
-				s.factory.DestHost, s.factory.DestPort,
-				mount,
-				s.factory.DestUser, s.factory.DestPass,
-				s.factory.NTRIPVersion,
-				func() { log.Printf("[DEBUG] Forwarder closed, mount=%s", mount) },
-			)
-			go fwd.StartForwarding(reader)
-
-			// RTCM data bat dau ngay sau ICY header
+			// Data RTCM bat dau ngay sau ICY header
 			remaining := s.headerBuf[headerEnd+4:]
 			if len(remaining) > 0 {
-				writer.Write(remaining)
+				s.pendingBuf = append(s.pendingBuf, remaining...)
 			}
 			s.headerBuf = nil
+
+			// Lay mount trong goroutine rieng de khong block packet loop,
+			// flush pendingBuf sau khi forwarder san sang
+			go s.startForwardWhenReady()
 		} else {
-			if s.writer != nil {
-				_, err := s.writer.Write(reassembly.Bytes)
-				if err != nil {
+			s.writerMu.Lock()
+			w := s.writer
+			s.writerMu.Unlock()
+
+			if w != nil {
+				if _, err := w.Write(reassembly.Bytes); err != nil {
 					log.Printf("[DEBUG] Pipe write error: %v", err)
 				}
+			} else {
+				// Writer chua san sang (dang cho mount), buffer tiep
+				s.pendingBuf = append(s.pendingBuf, reassembly.Bytes...)
 			}
 		}
 	}
 }
 
+func (s *DataStream) startForwardWhenReady() {
+	// Doi toi da 2 giay de RequestStream luu mount vao map
+	var mount string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if mountVal, ok := s.factory.mounts.Load(s.key); ok {
+			mount = mountVal.(string)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if mount == "" {
+		log.Printf("[WARN] No mount found for client %s, dropping stream", s.key)
+		s.pendingBuf = nil
+		return
+	}
+	log.Printf("[INFO] Starting RTCM forward: mount=%s client=%s", mount, s.key)
+
+	reader, writer := io.Pipe()
+
+	fwd := forwarder.NewForwarder(
+		s.factory.DestHost, s.factory.DestPort,
+		mount,
+		s.factory.DestUser, s.factory.DestPass,
+		s.factory.NTRIPVersion,
+		func() { log.Printf("[DEBUG] Forwarder closed, mount=%s", mount) },
+	)
+	go fwd.StartForwarding(reader)
+
+	// Flush data da buffer truoc do
+	if len(s.pendingBuf) > 0 {
+		writer.Write(s.pendingBuf)
+		s.pendingBuf = nil
+	}
+
+	s.writerMu.Lock()
+	s.writer = writer
+	s.writerMu.Unlock()
+}
+
 func (s *DataStream) ReassemblyComplete() {
-	if s.writer != nil {
-		s.writer.Close()
+	s.writerMu.Lock()
+	w := s.writer
+	s.writerMu.Unlock()
+	if w != nil {
+		w.Close()
 	}
 	s.factory.mounts.Delete(s.key)
 }
