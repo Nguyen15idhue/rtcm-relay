@@ -20,8 +20,11 @@ type SourceConfig struct {
 }
 
 type DestinationConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host         string `yaml:"host"`
+	Port         int    `yaml:"port"`
+	User         string `yaml:"user"`
+	Pass         string `yaml:"pass"`
+	NTRIPVersion int    `yaml:"ntrip_version"`
 }
 
 type LoggingConfig struct {

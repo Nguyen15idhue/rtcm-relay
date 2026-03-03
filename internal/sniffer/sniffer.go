@@ -18,7 +18,7 @@ type Sniffer struct {
 	factory    *stream.StreamFactory
 }
 
-func NewSniffer(interfaceName string, port int, destHost string, destPort int) (*Sniffer, error) {
+func NewSniffer(interfaceName string, port int, destHost string, destPort int, destUser string, destPass string, ntripVersion int) (*Sniffer, error) {
 	handle, err := pcap.OpenLive(interfaceName, 1600, true, pcap.BlockForever)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open pcap handle: %w", err)
@@ -31,7 +31,7 @@ func NewSniffer(interfaceName string, port int, destHost string, destPort int) (
 
 	log.Printf("[DEBUG] Sniffer started on interface %s, filtering port %d", interfaceName, port)
 
-	factory := stream.NewStreamFactory(destHost, destPort)
+	factory := stream.NewStreamFactory(destHost, destPort, destUser, destPass, ntripVersion)
 	streamPool := tcpassembly.NewStreamPool(factory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 

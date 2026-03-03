@@ -113,21 +113,27 @@ func (s *NTRIPStream) Close() {
 }
 
 type StreamFactory struct {
-	DestHost string
-	DestPort int
+	DestHost     string
+	DestPort     int
+	DestUser     string
+	DestPass     string
+	NTRIPVersion int
 }
 
-func NewStreamFactory(host string, port int) *StreamFactory {
+func NewStreamFactory(host string, port int, user string, pass string, ntripVersion int) *StreamFactory {
 	return &StreamFactory{
-		DestHost: host,
-		DestPort: port,
+		DestHost:     host,
+		DestPort:     port,
+		DestUser:     user,
+		DestPass:     pass,
+		NTRIPVersion: ntripVersion,
 	}
 }
 
 func (f *StreamFactory) New(netFlow, tcpFlow gopacket.Flow) tcpassembly.Stream {
 	log.Printf("[DEBUG] New TCP stream: %s -> %s", netFlow.Src(), netFlow.Dst())
 
-	fwd := forwarder.NewForwarder(f.DestHost, f.DestPort, "", func() {
+	fwd := forwarder.NewForwarder(f.DestHost, f.DestPort, "", f.DestUser, f.DestPass, f.NTRIPVersion, func() {
 		log.Printf("[DEBUG] Forwarder closed")
 	})
 

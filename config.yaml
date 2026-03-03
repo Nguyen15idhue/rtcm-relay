@@ -6,6 +6,11 @@ source:
 destination:
   host: "rtktk.online"
   port: 1509
+  # NTRIP authentication: de trong neu khong can. user co the bo trong neu chi co pass.
+  user: ""
+  pass: "123456"
+  # ntrip_version: 1 hoac 2 (mac dinh 1 de tuong thich voi GeoNtripCaster)
+  ntrip_version: 1
 
 logging:
   level: "debug"

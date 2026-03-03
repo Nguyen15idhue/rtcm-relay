@@ -31,12 +31,18 @@ func main() {
 	log.Printf("[DEBUG]   Destination Host: %s", cfg.Destination.Host)
 	log.Printf("[DEBUG]   Destination Port: %d", cfg.Destination.Port)
 	log.Printf("[DEBUG]   Log Level: %s", cfg.Logging.Level)
+	log.Printf("[DEBUG]   Destination User: %q", cfg.Destination.User)
+	log.Printf("[DEBUG]   Destination Pass: (set=%v)", cfg.Destination.Pass != "")
+	log.Printf("[DEBUG]   NTRIP Version: %d", cfg.Destination.NTRIPVersion)
 
 	sniffer, err := sniffer.NewSniffer(
 		cfg.Source.Interface,
 		cfg.Source.Port,
 		cfg.Destination.Host,
 		cfg.Destination.Port,
+		cfg.Destination.User,
+		cfg.Destination.Pass,
+		cfg.Destination.NTRIPVersion,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create sniffer: %v", err)

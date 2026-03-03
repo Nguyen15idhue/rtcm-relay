@@ -1,6 +1,7 @@
 package forwarder
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -10,21 +11,30 @@ import (
 )
 
 type Forwarder struct {
-	host      string
-	port      int
-	mount     string
-	conn      net.Conn
-	mu        sync.Mutex
-	connected bool
-	onClose   func()
+	host         string
+	port         int
+	mount        string
+	user         string
+	pass         string
+	ntripVersion int
+	conn         net.Conn
+	mu           sync.Mutex
+	connected    bool
+	onClose      func()
 }
 
-func NewForwarder(host string, port int, mount string, onClose func()) *Forwarder {
+func NewForwarder(host string, port int, mount string, user string, pass string, ntripVersion int, onClose func()) *Forwarder {
+	if ntripVersion == 0 {
+		ntripVersion = 1
+	}
 	return &Forwarder{
-		host:    host,
-		port:    port,
-		mount:   mount,
-		onClose: onClose,
+		host:         host,
+		port:         port,
+		mount:        mount,
+		user:         user,
+		pass:         pass,
+		ntripVersion: ntripVersion,
+		onClose:      onClose,
 	}
 }
 
@@ -43,8 +53,26 @@ func (f *Forwarder) Connect() error {
 		return err
 	}
 
-	request := fmt.Sprintf("GET /%s HTTP/1.1\r\nHost: %s\r\nNtrip-Version: Ntrip/2.0\r\n\r\n",
-		f.mount, f.host)
+	var request string
+	if f.ntripVersion == 1 {
+		// NTRIP 1.0: dung HTTP/1.0, Authorization: Basic
+		authStr := f.user + ":" + f.pass
+		encoded := base64.StdEncoding.EncodeToString([]byte(authStr))
+		request = fmt.Sprintf("GET /%s HTTP/1.0\r\nUser-Agent: NTRIP GoCaster/1.0\r\n", f.mount)
+		if f.pass != "" {
+			request += fmt.Sprintf("Authorization: Basic %s\r\n", encoded)
+		}
+		request += "\r\n"
+	} else {
+		// NTRIP 2.0
+		request = fmt.Sprintf("GET /%s HTTP/1.1\r\nHost: %s\r\nNtrip-Version: Ntrip/2.0\r\nUser-Agent: NTRIP GoCaster/2.0\r\n", f.mount, f.host)
+		if f.pass != "" {
+			authStr := f.user + ":" + f.pass
+			encoded := base64.StdEncoding.EncodeToString([]byte(authStr))
+			request += fmt.Sprintf("Authorization: Basic %s\r\n", encoded)
+		}
+		request += "\r\n"
+	}
 
 	_, err = conn.Write([]byte(request))
 	if err != nil {
@@ -55,7 +83,7 @@ func (f *Forwarder) Connect() error {
 
 	f.conn = conn
 	f.connected = true
-	log.Printf("[DEBUG] Connected to %s, mount: %s", addr, f.mount)
+	log.Printf("[DEBUG] Connected to %s, mount: %s (NTRIP v%d)", addr, f.mount, f.ntripVersion)
 	return nil
 }
 
